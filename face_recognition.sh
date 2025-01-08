@@ -30,7 +30,7 @@ function init_variables() {
 
     video_format="RGB"
 
-    input_source="$RESOURCES_DIR/face_recognition.mp4"
+    input_source="$RESOURCES_DIR/test.mp4"
     video_sink_element=$([ "$XV_SUPPORTED" = "true" ] && echo "xvimagesink" || echo "ximagesink")
     additional_parameters=""
     print_gst_launch_only=false
@@ -107,30 +107,17 @@ function parse_args() {
 }
 
 function set_networks() {
-    # Face Recognition
-    if [ "$video_format" == "RGB" ]; then
-        recognition_hef="$RESOURCES_DIR/arcface_mobilefacenet.hef"
-        echo "Loading Face Recognition model: $recognition_hef"
-    else
-        recognition_hef="$RESOURCES_DIR/arcface_mobilefacenet.hef"
-        echo "Loading Face Recognition model: $recognition_hef"
-    fi
+    # Face Recognition model path
+    # (We do NOT set source_element here!)
+    echo "Loading Face Recognition model: $recognition_hef"
 
-    # Face Detection and Landmarking
-    if [ "$video_format" == "RGB" ] && [ $detection_network == "scrfd_10g" ]; then
+    # Face Detection model
+    if [ "$video_format" == "RGB" ] && [ "$detection_network" == "scrfd_10g" ]; then
         hef_path="$RESOURCES_DIR/scrfd_10g.hef"
         echo "Loading Face Detection model: $hef_path"
         recognition_post="arcface_rgb"
-    elif [ "$video_format" == "RGB" ] && [ $detection_network == "scrfd_2.5g" ]; then
-        hef_path="$RESOURCES_DIR/scrfd_2.5g.hef"
-        echo "Loading Face Detection model: $hef_path"
-        recognition_post="arcface_rgb"
-    elif [ "$video_format" == "NV12" ] && [ $detection_network == "scrfd_10g" ]; then
-        hef_path="$RESOURCES_DIR/scrfd_10g_nv12.hef"
-        recognition_post="arcface_nv12"
-    # video_format == NV12 && network == scrfd_2.5g
-    else 
-        echo "ERROR: The network scrfd_2.5g does not work with NV12 format, change the format or the network"
+    else
+        echo "ERROR: Either unsupported format or unsupported detection network."
         exit 1
     fi
 }
@@ -140,12 +127,20 @@ function main() {
     parse_args $@
     set_networks $@
 
-    # If the video provided is from a camera
+    # Decide which GStreamer source element to use
     if [[ $input_source =~ "/dev/video" ]]; then
-        source_element="v4l2src device=$input_source name=src_0 ! video/x-raw,format=YUY2,width=1920,height=1080,framerate=30/1 ! \
-                        queue  max-size-buffers=30 max-size-bytes=0 max-size-time=0 ! \
+        # v4l2 camera
+        source_element="v4l2src device=$input_source name=src_0 ! \
+                        video/x-raw,format=YUY2,width=1920,height=1080,framerate=30/1 ! \
+                        queue max-size-buffers=30 max-size-bytes=0 max-size-time=0 ! \
                         videoflip video-direction=horiz"
+    elif [[ "$input_source" == "libcamera" ]]; then
+        # PiCamera2 with libcamera
+        source_element="libcamerasrc name=src_0 ! \
+                        video/x-raw,format=RGB,width=640,height=480,framerate=30/1 ! \
+                        queue max-size-buffers=30 max-size-bytes=0 max-size-time=0"
     else
+        # default: treat as file source
         source_element="filesrc location=$input_source name=src_0 ! decodebin"
     fi
 
@@ -206,7 +201,7 @@ function main() {
         fpsdisplaysink video-sink=$video_sink_element name=hailo_display sync=false text-overlay=false \
         ${additional_parameters}"
 
-    echo ${pipeline}
+    echo "${pipeline}"
     if [ "$print_gst_launch_only" = true ]; then
         exit 0
     fi

@@ -46,7 +46,8 @@ sudo apt-get install -y \
     gstreamer1.0-pulseaudio \
     python3-gi \
     python3-gi-cairo \
-    gir1.2-gtk-3.0
+    gir1.2-gtk-3.0 \
+    gstreamer1.0-libcamera
 
 # 4. Clone the tappas_cpp12 repository in the parent folder, then move into it
 cd ..

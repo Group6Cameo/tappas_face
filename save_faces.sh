@@ -1,35 +1,27 @@
 #!/bin/bash
 set -e
 
-function get_ubuntu_version() {
-    ubuntu_version=$(lsb_release -r | awk '{print $2}' | awk -F'.' '{print $1}')
-    if [ $ubuntu_version -lt 20  ]; then
-        echo "ERROR: The save faces pipeline is currently supported for Ubuntu 20.04 OS (Your system is Ubuntu $ubuntu_version)"
-        exit 1
-    fi
-}
+# function get_ubuntu_version() {
+#     ubuntu_version=$(lsb_release -r | awk '{print $2}' | awk -F'.' '{print $1}')
+#     if [ $ubuntu_version -lt 20  ]; then
+#         echo "ERROR: The save faces pipeline is currently supported for Ubuntu 20.04 OS (Your system is Ubuntu $ubuntu_version)"
+#         exit 1
+#     fi
+# }
 
 function set_networks() {
+
     # Face Recognition
     if [ "$video_format" == "RGB" ]; then
-        readonly RECOGNITION_HEF_PATH="$RESOURCES_DIR/arcface_mobilefacenet_v1.hef"
-    else
-        readonly RECOGNITION_HEF_PATH="$RESOURCES_DIR/arcface_mobilefacenet_nv12.hef"
+        readonly RECOGNITION_HEF_PATH="$RESOURCES_DIR/arcface_mobilefacenet.hef"
     fi
     
     # Face Detection and Landmarking
     if [ "$video_format" == "RGB" ] && [ $network == "scrfd_10g" ]; then
         hef_path="$RESOURCES_DIR/scrfd_10g.hef"
         readonly RECOGNITION_FUNCTION_NAME="arcface_rgb"
-    elif [ "$video_format" == "RGB" ] && [ $network == "scrfd_2.5g" ]; then
-        hef_path="$RESOURCES_DIR/scrfd_2.5g.hef"
-        readonly RECOGNITION_FUNCTION_NAME="arcface_rgb"
-    elif [ "$video_format" == "NV12" ] && [ $network == "scrfd_10g" ]; then
-        hef_path="$RESOURCES_DIR/scrfd_10g_nv12.hef"
-        readonly RECOGNITION_FUNCTION_NAME="arcface_nv12"
-    # video_format == NV12 && network == scrfd_2.5g
     else 
-        echo "ERROR: The network scrfd_2.5g does not work with NV12 format, change the format or the network"
+        echo "ERROR"
         exit 1
     fi
 }
@@ -38,19 +30,16 @@ function set_networks() {
 function init_variables() {
     print_help_if_needed $@
     script_dir=$(dirname $(realpath "$0"))
-    source $script_dir/../../../../../scripts/misc/checks_before_run.sh
 
-    readonly RESOURCES_DIR="$TAPPAS_WORKSPACE/apps/h8/gstreamer/general/face_recognition/resources"
-    readonly POSTPROCESS_DIR="$TAPPAS_WORKSPACE/apps/h8/gstreamer/libs/post_processes/"
-    readonly APPS_LIBS_DIR="$TAPPAS_WORKSPACE/apps/h8/gstreamer/libs/apps/vms/"
-    readonly CROPPER_SO="$POSTPROCESS_DIR/cropping_algorithms/libvms_croppers.so"
+    readonly RESOURCES_DIR="/home/aoyamaxx/Desktop/Repos/tappas_face/resources"
+    readonly CROPPER_SO="$RESOURCES_DIR/libvms_croppers.so"
     readonly DEFAULT_VIDEO_FORMAT="RGB"
     readonly DEFAULT_HEF_PATH="$RESOURCES_DIR/scrfd_10g.hef"
-    readonly RECOGNITION_POST_SO="$POSTPROCESS_DIR/libface_recognition_post.so"
+    readonly RECOGNITION_POST_SO="$RESOURCES_DIR/libface_recognition_post_h8l.so"
 
     # Face Alignment
-    readonly FACE_ALIGN_SO="$APPS_LIBS_DIR/libvms_face_align.so"
-    readonly POSTPROCESS_SO="$POSTPROCESS_DIR/libscrfd_post.so"
+    readonly FACE_ALIGN_SO="$RESOURCES_DIR/libvms_face_align.so"
+    readonly POSTPROCESS_SO="$RESOURCES_DIR/libscrfd_post_h8l.so"
     readonly FACE_JSON_CONFIG_PATH="$RESOURCES_DIR/configs/scrfd.json"
     readonly FUNCTION_NAME="scrfd_10g"
 
@@ -94,10 +83,10 @@ function parse_args() {
             exit 0
         elif [ $1 == "--network" ]; then
             if [ $2 == "scrfd_2.5g" ]; then
-                if [ $ubuntu_version -lt 22  ]; then
-                    echo "ERROR: The network scrfd_2.5g is currently supported for Ubuntu 22.04 OS only (Your system is Ubuntu $ubuntu_version)"
-                    exit 1
-                fi
+                # if [ $ubuntu_version -lt 22  ]; then
+                #     echo "ERROR: The network scrfd_2.5g is currently supported for Ubuntu 22.04 OS only (Your system is Ubuntu $ubuntu_version)"
+                #     exit 1
+                # fi
                 network="scrfd_2.5g"
                 hef_path="$RESOURCES_DIR/scrfd_2.5g.hef"
                 function_name="scrfd_2_5g"
@@ -136,7 +125,7 @@ function parse_args() {
 }
 
 function main() {
-    get_ubuntu_version $@
+    # get_ubuntu_version $@
     init_variables $@
     parse_args $@
     set_networks $@
