@@ -5,7 +5,7 @@ function init_variables() {
     print_help_if_needed $@
     script_dir=$(dirname $(realpath "$0"))
 
-    readonly RESOURCES_DIR="/home/aoyamaxx/Desktop/face_recognition/resources"
+    readonly RESOURCES_DIR="/home/aoyamaxx/Desktop/Repos/tappas_face/resources"
     readonly CROPPER_SO="$RESOURCES_DIR/libvms_croppers.so"
 
     # Face Alignment
