@@ -45,8 +45,8 @@ function print_usage() {
     echo "  --help                          Show this help"
     echo "  --show-fps                      Printing fps"
     echo "  -i INPUT --input INPUT          Set the input source (default $input_source)"
-    echo "  --network NETWORK               Set network to use. choose from [scrfd_10g, scrfd_2.5g], default is scrfd_10g"
-    echo "  --format FORMAT                 Choose video format from [RGB, NV12], default is RGB"
+    echo "  --network NETWORK               Set network to use. choose from [scrfd_10g], default is scrfd_10g"
+    echo "  --format FORMAT                 Choose video format from [RGB], default is RGB"
     echo "  --print-gst-launch              Print the ready gst-launch command without running it"
     exit 0
 }
@@ -135,10 +135,15 @@ function main() {
                         queue max-size-buffers=30 max-size-bytes=0 max-size-time=0 ! \
                         videoflip video-direction=horiz"
     elif [[ "$input_source" == "libcamera" ]]; then
-        # PiCamera2 with libcamera
+        # PiCamera2 with libcamera - Capture at 1080p and scale to 640x480
         source_element="libcamerasrc name=src_0 ! \
-                        video/x-raw,format=RGB,width=640,height=480,framerate=30/1 ! \
-                        queue max-size-buffers=30 max-size-bytes=0 max-size-time=0"
+                        video/x-raw,format=NV12,width=1920,height=1080,framerate=30/1 ! \
+                        queue max-size-buffers=30 max-size-bytes=0 max-size-time=0 ! \
+                        videoconvert ! \
+                        video/x-raw,format=RGB ! \
+                        videoscale method=1 add-borders=false ! \
+                        video/x-raw,width=960,height=540,pixel-aspect-ratio=1/1 ! \
+                        videoflip video-direction=horiz"
     else
         # default: treat as file source
         source_element="filesrc location=$input_source name=src_0 ! decodebin"
