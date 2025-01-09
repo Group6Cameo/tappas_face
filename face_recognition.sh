@@ -45,7 +45,7 @@ function print_usage() {
     echo "  --help                          Show this help"
     echo "  --show-fps                      Printing fps"
     echo "  -i INPUT --input INPUT          Set the input source (default $input_source)"
-    echo "  --network NETWORK               Set network to use. choose from [scrfd_10g], default is scrfd_10g"
+    echo "  --network NETWORK               Set network to use. choose from [scrfd_10g, scrfd_2_5g], default is scrfd_10g"
     echo "  --format FORMAT                 Choose video format from [RGB], default is RGB"
     echo "  --print-gst-launch              Print the ready gst-launch command without running it"
     exit 0
@@ -74,11 +74,10 @@ function parse_args() {
             input_source="$2"
             shift
         elif [ $1 == "--network" ]; then
-            if [ $2 == "scrfd_2.5g" ]; then
-                detection_network="scrfd_2.5g"
-                hef_path="$RESOURCES_DIR/scrfd_2.5g.hef"
+            if [ $2 == "scrfd_2_5g" ]; then
+                detection_network="scrfd_2_5g"
+                hef_path="$RESOURCES_DIR/scrfd_2_5g.hef"
                 detection_post="scrfd_2_5g"
-                check_file "$hef_path" ".hef"
             elif [ $2 != "scrfd_10g" ]; then
                 echo "Received invalid network: $2. See expected arguments below:"
                 print_usage
@@ -116,6 +115,10 @@ function set_networks() {
         hef_path="$RESOURCES_DIR/scrfd_10g.hef"
         echo "Loading Face Detection model: $hef_path"
         recognition_post="arcface_rgb"
+    elif [ "$video_format" == "RGB" ] && [ "$detection_network" == "scrfd_2_5g" ]; then
+        hef_path="$RESOURCES_DIR/scrfd_2_5g.hef"
+        echo "Loading Face Detection model: $hef_path"
+        recognition_post="arcface_rgb"
     else
         echo "ERROR: Either unsupported format or unsupported detection network."
         exit 1
@@ -142,7 +145,7 @@ function main() {
                         videoconvert ! \
                         video/x-raw,format=RGB ! \
                         videoscale method=1 add-borders=false ! \
-                        video/x-raw,width=960,height=540,pixel-aspect-ratio=1/1 ! \
+                        video/x-raw,width=640,height=360,pixel-aspect-ratio=1/1 ! \
                         videoflip video-direction=horiz"
     else
         # default: treat as file source
