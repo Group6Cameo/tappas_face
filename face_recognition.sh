@@ -30,9 +30,11 @@ function init_variables() {
 
     video_format="RGB"
 
-    input_source="$RESOURCES_DIR/test.mp4"
+    # Set default input source to libcamera
+    input_source="libcamera"
     video_sink_element=$([ "$XV_SUPPORTED" = "true" ] && echo "xvimagesink" || echo "ximagesink")
-    additional_parameters=""
+    # Set default to show fps
+    additional_parameters="-v 2>&1 | grep hailo_display"
     print_gst_launch_only=false
     vdevice_key=1
     local_gallery_file="$RESOURCES_DIR/gallery/face_recognition_local_gallery_rgba.json"
@@ -140,8 +142,8 @@ function main() {
     elif [[ "$input_source" == "libcamera" ]]; then
         # PiCamera2 with libcamera - Capture at 1080p and scale to 640x480
         source_element="libcamerasrc name=src_0 ! \
-                        video/x-raw,format=NV12,width=1920,height=1080,framerate=30/1 ! \
-                        queue max-size-buffers=30 max-size-bytes=0 max-size-time=0 ! \
+                        video/x-raw,format=NV12,width=1920,height=1080,framerate=20/1 ! \
+                        queue max-size-buffers=60 max-size-bytes=0 max-size-time=0 ! \
                         videoconvert ! \
                         video/x-raw,format=RGB ! \
                         videoscale method=1 add-borders=false ! \
