@@ -209,7 +209,7 @@ function main() {
         $RECOGNITION_PIPELINE ! \
         queue name=hailo_pre_gallery_q leaky=no max-size-buffers=60 max-size-bytes=0 max-size-time=0 ! \
         hailogallery gallery-file-path=$local_gallery_file \
-        load-local-gallery=false similarity-thr=.4 gallery-queue-size=20 class-id=-1 ! \
+        load-local-gallery=false similarity-thr=.8 gallery-queue-size=20 class-id=-1 ! \
         queue name=hailo_pre_draw2 leaky=no max-size-buffers=60 max-size-bytes=0 max-size-time=0 ! \
         hailooverlay name=hailo_overlay qos=false show-confidence=true local-gallery=true line-thickness=5 font-thickness=2 landmark-point-radius=8 ! \
         queue name=hailo_post_draw leaky=no max-size-buffers=60 max-size-bytes=0 max-size-time=0 ! \
