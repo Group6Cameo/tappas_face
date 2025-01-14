@@ -38,7 +38,7 @@ function init_variables() {
     input_source="libcamera"
     video_sink_element=$([ "$XV_SUPPORTED" = "true" ] && echo "xvimagesink" || echo "ximagesink")
     # Set default to show fps
-    additional_parameters="-v 2>&1 | grep hailo_display"
+    # additional_parameters="-v 2>&1 | grep hailo_display"
     print_gst_launch_only=false
     vdevice_key=1
     local_gallery_file="$RESOURCES_DIR/gallery/face_recognition_local_gallery_rgba.json"
@@ -141,18 +141,16 @@ function main() {
         # v4l2 camera
         source_element="v4l2src device=$input_source name=src_0 ! \
                         video/x-raw,format=YUY2,width=1920,height=1080,framerate=30/1 ! \
-                        queue max-size-buffers=60 max-size-bytes=0 max-size-time=0 ! \
-                        videoflip video-direction=horiz"
+                        queue max-size-buffers=50 max-size-bytes=0 max-size-time=0"
     elif [[ "$input_source" == "libcamera" ]]; then
         # PiCamera2 with libcamera - Capture at 1080p and scale to 640x480
         source_element="libcamerasrc name=src_0 ! \
                         video/x-raw,format=NV12,width=1920,height=1080,framerate=15/1 ! \
-                        queue max-size-buffers=60 max-size-bytes=0 max-size-time=0 ! \
+                        queue max-size-buffers=50 max-size-bytes=0 max-size-time=0 ! \
                         videoconvert ! \
                         video/x-raw,format=YUY2 ! \
                         videoscale method=1 add-borders=false ! \
-                        video/x-raw,width=640,height=360,pixel-aspect-ratio=1/1 ! \
-                        videoflip video-direction=horiz"
+                        video/x-raw,width=640,height=360,pixel-aspect-ratio=1/1"
     else
         # default: treat as file source
         source_element="filesrc location=$input_source name=src_0 ! decodebin"
@@ -161,60 +159,59 @@ function main() {
     RECOGNITION_PIPELINE="hailocropper so-path=$CROPPER_SO function-name=face_recognition internal-offset=true name=cropper2 \
         hailoaggregator name=agg2 \
         cropper2. ! \
-            queue name=bypess2_q leaky=no max-size-buffers=60 max-size-bytes=0 max-size-time=0 ! \
+            queue name=bypess2_q leaky=downstream max-size-buffers=50 max-size-bytes=0 max-size-time=0 ! \
         agg2. \
         cropper2. ! \
-            queue name=pre_face_align_q leaky=no max-size-buffers=60 max-size-bytes=0 max-size-time=0 ! \
-            hailofilter so-path=$FACE_ALIGN_SO name=face_align_hailofilter use-gst-buffer=true qos=false ! \
-            queue name=detector_pos_face_align_q leaky=no max-size-buffers=60 max-size-bytes=0 max-size-time=0 ! \
+            queue name=pre_face_align_q leaky=downstream max-size-buffers=50 max-size-bytes=0 max-size-time=0 ! \
+            hailofilter so-path=$FACE_ALIGN_SO name=face_align_hailofilter use-gst-buffer=true qos=true ! \
+            queue name=detector_pos_face_align_q leaky=downstream max-size-buffers=50 max-size-bytes=0 max-size-time=0 ! \
             hailonet hef-path=$recognition_hef scheduling-algorithm=1 vdevice-key=$vdevice_key ! \
-            queue name=recognition_post_q leaky=no max-size-buffers=60 max-size-bytes=0 max-size-time=0 ! \
-            hailofilter function-name=$recognition_post so-path=$RECOGNITION_POST_SO name=face_recognition_hailofilter qos=false ! \
-            hailoexportfile location=$RECOGNITION_JSON_FILE ! \
-            queue name=recognition_pre_agg_q leaky=no max-size-buffers=60 max-size-bytes=0 max-size-time=0 ! \
+            queue name=recognition_post_q leaky=downstream max-size-buffers=50 max-size-bytes=0 max-size-time=0 ! \
+            hailofilter function-name=$recognition_post so-path=$RECOGNITION_POST_SO name=face_recognition_hailofilter qos=true ! \
+            hailoexportzmq address=\"tcp://*:5555\" ! \
+            queue name=recognition_pre_agg_q leaky=downstream max-size-buffers=50 max-size-bytes=0 max-size-time=0 ! \
         agg2. \
         agg2. "
 
     FACE_DETECTION_PIPELINE="hailonet hef-path=$hef_path scheduling-algorithm=1 vdevice-key=$vdevice_key ! \
-        queue name=detector_post_q leaky=no max-size-buffers=60 max-size-bytes=0 max-size-time=0 ! \
-        hailofilter so-path=$POSTPROCESS_SO name=face_detection_hailofilter qos=false config-path=$FACE_JSON_CONFIG_PATH function_name=$detection_post ! \
-        hailoexportfile location=$DETECTION_JSON_FILE ! \
-        queue name=export_q leaky=no max-size-buffers=60 max-size-bytes=0 max-size-time=0"
+        queue name=detector_post_q leaky=downstream max-size-buffers=50 max-size-bytes=0 max-size-time=0 ! \
+        hailofilter so-path=$POSTPROCESS_SO name=face_detection_hailofilter qos=true config-path=$FACE_JSON_CONFIG_PATH function_name=$detection_post ! \
+        queue name=export_q leaky=downstream max-size-buffers=50 max-size-bytes=0 max-size-time=0"
 
     FACE_TRACKER="hailotracker name=hailo_face_tracker class-id=-1 kalman-dist-thr=0.7 iou-thr=0.8 init-iou-thr=0.9 \
-                    keep-new-frames=2 keep-tracked-frames=6 keep-lost-frames=8 keep-past-metadata=true debug=false qos=false"
+                    keep-new-frames=2 keep-tracked-frames=6 keep-lost-frames=8 keep-past-metadata=true debug=false qos=true"
 
     DETECTOR_PIPELINE="tee name=t hailomuxer name=hmux \
         t. ! \
-            queue name=detector_bypass_q leaky=no max-size-buffers=60 max-size-bytes=0 max-size-time=0 ! \
+            queue name=detector_bypass_q leaky=downstream max-size-buffers=50 max-size-bytes=0 max-size-time=0 ! \
         hmux. \
         t. ! \
-            videoscale name=face_videoscale method=0 n-threads=2 add-borders=false qos=false ! \
+            videoscale name=face_videoscale method=0 n-threads=2 add-borders=false qos=true ! \
             video/x-raw, pixel-aspect-ratio=1/1 ! \
-            queue name=pre_face_detector_infer_q leaky=no max-size-buffers=60 max-size-bytes=0 max-size-time=0 ! \
+            queue name=pre_face_detector_infer_q leaky=downstream max-size-buffers=50 max-size-bytes=0 max-size-time=0 ! \
             $FACE_DETECTION_PIPELINE ! \
-            queue leaky=no max-size-buffers=60 max-size-bytes=0 max-size-time=0 ! \
+            queue leaky=downstream max-size-buffers=50 max-size-bytes=0 max-size-time=0 ! \
         hmux. \
         hmux. "
 
     pipeline="gst-launch-1.0 \
         $source_element ! \
-        queue name=hailo_pre_convert_0 leaky=no max-size-buffers=60 max-size-bytes=0 max-size-time=0 ! \
-        videoconvert n-threads=2 qos=false ! \
-        queue name=pre_detector_q leaky=no max-size-buffers=60 max-size-bytes=0 max-size-time=0 ! \
+        queue name=hailo_pre_convert_0 leaky=downstream max-size-buffers=50 max-size-bytes=0 max-size-time=0 ! \
+        videoconvert n-threads=2 qos=true ! \
+        queue name=pre_detector_q leaky=downstream max-size-buffers=50 max-size-bytes=0 max-size-time=0 ! \
         $DETECTOR_PIPELINE ! \
-        queue name=pre_tracker_q leaky=no max-size-buffers=60 max-size-bytes=0 max-size-time=0 ! \
+        queue name=pre_tracker_q leaky=downstream max-size-buffers=50 max-size-bytes=0 max-size-time=0 ! \
         $FACE_TRACKER ! \
-        queue name=hailo_post_tracker_q leaky=no max-size-buffers=60 max-size-bytes=0 max-size-time=0 ! \
+        queue name=hailo_post_tracker_q leaky=downstream max-size-buffers=50 max-size-bytes=0 max-size-time=0 ! \
         $RECOGNITION_PIPELINE ! \
-        queue name=hailo_pre_gallery_q leaky=no max-size-buffers=60 max-size-bytes=0 max-size-time=0 ! \
+        queue name=hailo_pre_gallery_q leaky=downstream max-size-buffers=50 max-size-bytes=0 max-size-time=0 ! \
         hailogallery gallery-file-path=$local_gallery_file \
         load-local-gallery=false similarity-thr=.8 gallery-queue-size=20 class-id=-1 ! \
-        queue name=hailo_pre_draw2 leaky=no max-size-buffers=60 max-size-bytes=0 max-size-time=0 ! \
-        hailooverlay name=hailo_overlay qos=false show-confidence=true local-gallery=true line-thickness=5 font-thickness=2 landmark-point-radius=8 ! \
-        queue name=hailo_post_draw leaky=no max-size-buffers=60 max-size-bytes=0 max-size-time=0 ! \
-        videoconvert n-threads=4 qos=false name=display_videoconvert qos=false ! \
-        queue name=hailo_display_q_0 leaky=no max-size-buffers=60 max-size-bytes=0 max-size-time=0 ! \
+        queue name=hailo_pre_draw2 leaky=downstream max-size-buffers=50 max-size-bytes=0 max-size-time=0 ! \
+        hailooverlay name=hailo_overlay qos=true show-confidence=true local-gallery=true line-thickness=5 font-thickness=2 landmark-point-radius=8 ! \
+        queue name=hailo_post_draw leaky=downstream max-size-buffers=50 max-size-bytes=0 max-size-time=0 ! \
+        videoconvert n-threads=4 qos=true name=display_videoconvert qos=true ! \
+        queue name=hailo_display_q_0 leaky=downstream max-size-buffers=50 max-size-bytes=0 max-size-time=0 ! \
         fpsdisplaysink video-sink=$video_sink_element name=hailo_display sync=false text-overlay=false \
         ${additional_parameters}"
 

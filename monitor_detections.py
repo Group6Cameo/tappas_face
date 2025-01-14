@@ -5,7 +5,9 @@ import os
 import threading
 import subprocess
 import csv
-from datetime import datetime
+import zmq
+from datetime import datetime, timedelta
+from collections import deque
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -13,19 +15,70 @@ CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 IMAGE_WIDTH = 640
 IMAGE_HEIGHT = 360
 ENABLE_CONSOLE_PRINT = False  # Switch for console printing
+
 RESOURCES_DIR = os.path.join(CURRENT_DIR, 'tmp')
 LOG_FILE = os.path.join(RESOURCES_DIR, 'face_info_log.csv')
 
+MAX_HISTORY_SECONDS = 5.0
+MAX_ROWS = 200
+
+# We can store the CSV header somewhere
+CSV_HEADER = ['Timestamp', 'Rec_BufferSet', 'Detection_ID',
+              'Gallery_ID', 'Label', 'Center_X', 'Center_Y']
+
+class RecordManager:
+    def __init__(self, max_records=200, max_age_seconds=5.0):
+        self.records = deque(maxlen=max_records)  # each item is (datetime_obj, row_data_list)
+        self.max_age = timedelta(seconds=max_age_seconds)
+        
+    def add_record(self, record):
+        """Add a new record to the in-memory deque and write only that record to CSV."""
+        now = datetime.now()
+        self.records.append((now, record))
+        
+        # Append only the new record to CSV (for streaming)
+        with open(LOG_FILE, 'a', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(record)
+    
+    def clean_old_records(self):
+        """Remove records older than max_age and rewrite the CSV if something changed."""
+        now = datetime.now()
+        old_len = len(self.records)
+        
+        # Pop from the left while the oldest record is too old
+        while self.records and (now - self.records[0][0]) > self.max_age:
+            self.records.popleft()
+        
+        new_len = len(self.records)
+        pruned_count = old_len - new_len
+        
+        # If we pruned anything, we must rewrite the CSV so disk matches memory
+        if pruned_count > 0:
+            print(f"Pruned {pruned_count} records")
+
+            # Re-write CSV with only current records
+            with open(LOG_FILE, 'w', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+                # Optionally write header each time if you want a valid CSV
+                writer.writerow(CSV_HEADER)
+                # Now write the in-memory items
+                for _, row_data in self.records:
+                    writer.writerow(row_data)
+
+        # Filter out 'nd' values when displaying unique IDs
+        unique_ids = set(r[3] for _, r in self.records if r[3] != 'nd')
+        if unique_ids:  # Only print if there are valid IDs
+            print(f"Current unique Gallery IDs in memory: {unique_ids}")
+
 def clear_file(filename):
-    """Create file if it doesn't exist, clear it if it does"""
+    """Create file if it doesn't exist, clear it if it does."""
     try:
-        # Create directory if it doesn't exist
         directory = os.path.dirname(filename)
         if directory and not os.path.exists(directory):
             os.makedirs(directory)
             print(f"Created directory: {directory}")
         
-        # Create or clear file
         open(filename, 'w').close()
         print(f"Cleared/Created {filename}")
     except Exception as e:
@@ -33,7 +86,7 @@ def clear_file(filename):
         raise
 
 def run_bash_script():
-    """Run the face recognition bash script"""
+    """Run the face recognition bash script."""
     try:
         subprocess.run(['bash', 'face_recognition.sh'], check=True)
     except subprocess.CalledProcessError as e:
@@ -42,32 +95,26 @@ def run_bash_script():
         print(f"Unexpected error running bash script: {e}")
 
 def calculate_center(bbox):
-    """Calculate center point from bbox in pixel coordinates"""
-    # Convert normalized coordinates to pixel coordinates
     center_x = (bbox["xmin"] + bbox["width"]/2) * IMAGE_WIDTH
     center_y = (bbox["ymin"] + bbox["height"]/2) * IMAGE_HEIGHT
     return int(center_x), int(center_y)
 
 def get_face_info(data):
-    """Extract face detection and recognition info from data"""
     face_info = {
-        'mode0_id': None,  # Detection ID
-        'mode1_id': None,  # Gallery ID
-        'label': None,     # Recognition label
+        'mode0_id': None,
+        'mode1_id': None,
+        'label': None,
         'center_x': None,
         'center_y': None
     }
     
     try:
         if "HailoROI" in data:
-            # Get detection bbox and center
             if "HailoBBox" in data["HailoROI"]:
                 bbox = data["HailoROI"]["HailoBBox"]
                 face_info['center_x'], face_info['center_y'] = calculate_center(bbox)
             
-            # Get unique IDs and recognition result from SubObjects
             for obj in data["HailoROI"].get("SubObjects", []):
-                # Get mode 0/1 IDs
                 if "HailoUniqueID" in obj:
                     unique_id = obj["HailoUniqueID"]
                     if unique_id["mode"] == 0:
@@ -75,163 +122,95 @@ def get_face_info(data):
                     elif unique_id["mode"] == 1:
                         face_info['mode1_id'] = unique_id["unique_id"]
                 
-                # Get recognition label
                 if "HailoClassification" in obj:
                     classification = obj["HailoClassification"]
                     if classification["classification_type"] == "recognition_result":
                         face_info['label'] = classification["label"]
-    
     except Exception as e:
         print(f"Error extracting face info: {str(e)}")
     
     return face_info
 
-def write_frame_info(frame_num, rec_buffer=None, face_info=None):
-    """Helper function to write frame info to CSV"""
-    if face_info is None:
-        # No recognition data available, write None values
-        row = [
-            datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'),
-            frame_num,
-            'null',
-            'null',
-            'null',
-            'null',
-            'null',
-            'null'
-        ]
-    else:
-        # Write with available recognition data
-        # If using copied data, mark the rec_buffer as 'cpX' where X is the original recognition buffer
-        rec_buffer_str = f"cp{face_info['original_buffer']}" if rec_buffer != face_info.get('original_buffer') else (rec_buffer or 'null')
-        
-        # Use 'nd' for unrecognized faces (detected but not in gallery)
-        gallery_id = face_info['mode1_id'] or 'nd'
-        label = face_info['label'] or 'nd'
-        
-        row = [
-            datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'),
-            frame_num,
-            rec_buffer_str,
-            face_info['mode0_id'],
-            gallery_id,
-            label,
-            face_info['center_x'],
-            face_info['center_y']
-        ]
+def monitor_zmq():
+    """Monitor ZMQ socket for face recognition data."""
+    context = zmq.Context()
+    socket = context.socket(zmq.SUB)
+    socket.connect("tcp://localhost:5555")
+    socket.setsockopt_string(zmq.SUBSCRIBE, "")  # Subscribe to all topics/messages
     
-    with open(LOG_FILE, 'a', newline='') as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(row)
+    record_manager = RecordManager(max_records=MAX_ROWS, max_age_seconds=MAX_HISTORY_SECONDS)
+    last_cleanup = datetime.now()
+    processed_data_ids = set()
     
-    if ENABLE_CONSOLE_PRINT:
-        print(f"Current Frame {frame_num}, Rec BufferSet {row[2]}: "
-              f"Detection_ID:{face_info['mode0_id'] if face_info else 'null'}, "
-              f"Gallery_ID:{gallery_id if face_info else 'null'}, "
-              f"Label:{label if face_info else 'null'}, "
-              f"x:{face_info['center_x'] if face_info else 'null'}, "
-              f"y:{face_info['center_y'] if face_info else 'null'}")
-
-def monitor_files(rec_filename, det_filename):
-    """Monitor both recognition and detection files"""
-    processed_rec_data = set()
-    current_frame = -1
-    last_face_info = None  # Store last valid recognition info
-    processed_frames = set()  # Track processed detection frames
-    
-    # Initialize CSV file with headers
+    # Write CSV header initially
     with open(LOG_FILE, 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
-        writer.writerow(['Timestamp', 'Current_Frame', 'Rec_BufferSet', 'Detection_ID', 
-                        'Gallery_ID', 'Label', 'Center_X', 'Center_Y'])
+        writer.writerow(CSV_HEADER)
+    
+    print("Starting ZMQ-based face tracking...")
     
     while True:
         try:
-            # First check detection file for actual frame count
-            if os.path.exists(det_filename):
-                with open(det_filename, 'r') as file:
-                    det_content = file.read().strip()
-                    if det_content:
-                        try:
-                            if det_content.endswith(','):
-                                det_content = '[' + det_content[:-1] + ']'
-                            elif not (det_content.startswith('[') and det_content.endswith(']')):
-                                det_content = '[' + det_content + ']'
-                            
-                            det_data_list = json.loads(det_content)
-                            if det_data_list:
-                                # Process each detection frame
-                                for det_data in det_data_list:
-                                    frame_num = det_data["buffer_offset"]
-                                    if frame_num > current_frame:
-                                        current_frame = frame_num
-                                        if frame_num not in processed_frames:
-                                            # Will process this frame with latest recognition data
-                                            processed_frames.add(frame_num)
-                                            write_frame_info(frame_num, frame_num, last_face_info)
-                        except Exception as e:
-                            print(f"Error processing detection data: {str(e)}")
-            
-            # Then process recognition data
-            if os.path.exists(rec_filename):
-                with open(rec_filename, 'r') as file:
-                    rec_content = file.read().strip()
-                    if rec_content:
-                        try:
-                            if rec_content.endswith(','):
-                                rec_content = '[' + rec_content[:-1] + ']'
-                            elif not (rec_content.startswith('[') and rec_content.endswith(']')):
-                                rec_content = '[' + rec_content + ']'
-                            
-                            rec_data_list = json.loads(rec_content)
-                            
-                            # Get latest recognition data that hasn't been processed
-                            for data in rec_data_list:
-                                # Create unique identifier for this recognition data
-                                data_id = f"{data['timestamp (ms)']}_{data['stream_id']}"
-                                
-                                if data_id not in processed_rec_data:
-                                    face_info = get_face_info(data)
-                                    
-                                    if face_info['mode0_id'] is not None:
-                                        # Store original buffer offset
-                                        face_info['original_buffer'] = data['buffer_offset']
-                                        # Update last valid face info
-                                        last_face_info = face_info
-                                        # Write frame info with new recognition data
-                                        write_frame_info(current_frame, data['buffer_offset'], face_info)
-                                    
-                                    processed_rec_data.add(data_id)
-                                        
-                        except json.JSONDecodeError:
-                            pass
-                        except Exception as e:
-                            print(f"Error processing recognition data: {str(e)}")
-            
-            time.sleep(0.1)
+            # Non-blocking receive with 100ms poll
+            if socket.poll(100):
+                data = socket.recv_json()
+                data_id = f"{data.get('timestamp (ms)', '')}_${data.get('stream_id', '')}"
+                
+                if data_id not in processed_data_ids:
+                    face_info = get_face_info(data)
                     
+                    if face_info['mode0_id'] is not None:
+                        gallery_id = face_info['mode1_id'] or 'nd'
+                        label = face_info['label'] or 'nd'
+                        
+                        row = [
+                            datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'),
+                            data['buffer_offset'],
+                            face_info['mode0_id'],
+                            gallery_id,
+                            label,
+                            face_info['center_x'],
+                            face_info['center_y']
+                        ]
+                        
+                        record_manager.add_record(row)
+                        processed_data_ids.add(data_id)
+                        
+                        if ENABLE_CONSOLE_PRINT:
+                            print(f"New Data - Rec BufferSet {data['buffer_offset']}: "
+                                  f"DetID:{face_info['mode0_id']}, "
+                                  f"GalleryID:{gallery_id}, "
+                                  f"Label:{label}, "
+                                  f"X:{face_info['center_x']}, "
+                                  f"Y:{face_info['center_y']}")
+            
+            # Clean old records every 5 seconds
+            now = datetime.now()
+            if (now - last_cleanup).total_seconds() >= 5.0:
+                record_manager.clean_old_records()
+                # Optionally prune 'processed_data_ids' if too large
+                if len(processed_data_ids) > MAX_ROWS * 2:
+                    processed_data_ids.clear()
+                last_cleanup = now
+                
+        except zmq.ZMQError as e:
+            print(f"ZMQ error: {str(e)}")
+            time.sleep(0.1)
         except Exception as e:
-            print(f"File reading error: {str(e)}")
+            print(f"Unexpected error: {str(e)}")
             time.sleep(0.1)
 
 def main():
-    rec_file = os.path.join(RESOURCES_DIR, 'face_recognition_output.json')
-    det_file = os.path.join(RESOURCES_DIR, 'face_detection_output.json')
-    
-    # Clear all files
-    clear_file(rec_file)
-    clear_file(det_file)
     clear_file(LOG_FILE)
     
-    # Create and start bash script thread
-    bash_thread = threading.Thread(target=run_bash_script)
-    bash_thread.daemon = True
+    # Start face recognition script, if needed
+    bash_thread = threading.Thread(target=run_bash_script, daemon=True)
     bash_thread.start()
     
-    print("Starting monitoring...")
+    print("Monitoring ZMQ feed...")
     try:
-        time.sleep(1)
-        monitor_files(rec_file, det_file)
+        time.sleep(1)  # give script time to start
+        monitor_zmq()
     except KeyboardInterrupt:
         print("\nMonitoring stopped.")
 

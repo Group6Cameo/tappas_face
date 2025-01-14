@@ -5,10 +5,30 @@
 set -e
 
 # 1. Update apt-get to ensure we have the latest package information
-sudo apt-get update
+echo "Updating system packages..."
+sudo apt update
+sudo apt upgrade -y
+
+echo "Installing system dependencies for OpenCV..."
+sudo apt install -y libhdf5-dev libhdf5-103 libqtgui4 libqtwebkit4 libqt4-test libatlas-base-dev libjasper-dev libilmbase23 libopenexr23 libgstreamer1.0-dev
+
+sudo apt install -y python3-picamera2
+
+echo "Installing virtual environment support..."
+sudo apt install -y python3-venv
+
+echo "Setting up Python virtual environment 'cameo'..."
+python3 -m venv ../cameo --system-site-packages
+source ../cameo/bin/activate
+
+echo "Installing Python dependencies..."
+pip install --upgrade pip
+pip install cmake
+pip install -r requirements.txt
 
 # 2. Install hailo-all
 sudo apt-get install -y hailo-all
+sudo apt install rpicam-apps
 
 # 3. Install required packages
 sudo apt-get install -y \
