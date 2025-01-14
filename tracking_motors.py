@@ -29,6 +29,13 @@ SERVO_STEP = 1.5
 CENTRE_X = IMAGE_WIDTH // 2
 CENTRE_Y = IMAGE_HEIGHT // 2
 
+DETECTION_WINDOW = 1.0  # 1 second window for conflict detection
+CONFLICT_THRESHOLD = 3  # Number of conflicts needed to trigger resolution
+
+# Add these after other global variables
+detection_conflicts = {}  # {gallery_id: [(timestamp, detection_id, x, y), ...]}
+current_override = None  # Store current override detection_id if any
+
 # =============================
 # ========== SETUP =============
 # =============================
@@ -149,8 +156,10 @@ def start_monitor_detection():
     """
     Launches the face-detection script in the background. 
     """
-    subprocess.Popen(['python3', 'monitor_detections.py'])
-    print("Started monitor_detection.py")
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    monitor_script = os.path.join(current_dir, 'monitor_detections.py')
+    subprocess.Popen(['python3', monitor_script])
+    print(f"Started monitor_detection.py from: {monitor_script}")
 
 def get_latest_csv_row(csv_path):
     """
@@ -191,30 +200,91 @@ def get_latest_csv_row(csv_path):
     except:
         return None
 
+def check_detection_conflicts(gallery_id, detection_id, center_x, center_y):
+    """
+    Check if there are conflicts in detection IDs for the same gallery ID
+    Returns the detection_id to track
+    """
+    global detection_conflicts, current_override
+    current_time = time.time()
+    
+    # Initialize or clean old entries
+    if gallery_id not in detection_conflicts:
+        detection_conflicts[gallery_id] = []
+    
+    # Remove old entries (older than DETECTION_WINDOW)
+    detection_conflicts[gallery_id] = [
+        entry for entry in detection_conflicts[gallery_id]
+        if current_time - entry[0] < DETECTION_WINDOW
+    ]
+    
+    # Add new detection
+    detection_conflicts[gallery_id].append((current_time, detection_id, center_x, center_y))
+    
+    # Check for conflicts in the current window
+    recent_detections = detection_conflicts[gallery_id]
+    unique_detection_ids = set(entry[1] for entry in recent_detections)
+    
+    # If we have conflicts and enough samples
+    if len(unique_detection_ids) > 1 and len(recent_detections) >= CONFLICT_THRESHOLD:
+        # Group detections by detection_id
+        detection_groups = {}
+        for entry in recent_detections:
+            _, det_id, x, y = entry
+            if det_id not in detection_groups:
+                detection_groups[det_id] = []
+            detection_groups[det_id].append((x, y))
+        
+        # Find the detection_id closest to center
+        closest_id = None
+        min_distance = float('inf')
+        
+        for det_id, positions in detection_groups.items():
+            # Calculate average position for this detection_id
+            avg_x = sum(x for x, _ in positions) / len(positions)
+            avg_y = sum(y for y, _ in positions) / len(positions)
+            
+            # Calculate distance to center
+            distance = ((avg_x - CENTRE_X) ** 2 + (avg_y - CENTRE_Y) ** 2) ** 0.5
+            
+            if distance < min_distance:
+                min_distance = distance
+                closest_id = det_id
+        
+        current_override = closest_id
+        print(f"Conflict detected for Gallery ID {gallery_id}. Using closest Detection ID: {closest_id}")
+        return closest_id
+    
+    # If no conflicts in window, clear override
+    if len(unique_detection_ids) == 1 and current_override:
+        print(f"Conflict resolved for Gallery ID {gallery_id}. Returning to normal tracking.")
+        current_override = None
+    
+    return detection_id
+
 def track_face():
     """
-    Continuously reads the CSV, finds the row with the largest Rec_BufferSet,
-    and moves the servos if that offset is new since last time.
+    Modified track_face function with conflict detection
     """
+    global TARGET_GALLERY_ID
     last_offset = -1
     x_last = None
     y_last = None
 
     while True:
         try:
+            TARGET_GALLERY_ID = get_target_face_id()
+            
             latest_row = get_latest_csv_row(CSV_PATH)
             if latest_row is not None:
-                # latest_row:
-                # [Timestamp, Rec_BufferSet, Detection_ID, Gallery_ID, Label, Center_X, Center_Y]
                 timestamp_str = latest_row[0]
                 offset_str = latest_row[1]
                 detection_id = latest_row[2]
-                gallery_id   = latest_row[3]
-                label        = latest_row[4]
+                gallery_id = latest_row[3]
+                label = latest_row[4]
                 center_x_str = latest_row[5]
                 center_y_str = latest_row[6]
 
-                # Check validity
                 if (gallery_id == TARGET_GALLERY_ID and 
                     detection_id not in [None, '', 'null'] and
                     center_x_str not in [None, '', 'null'] and
@@ -224,29 +294,21 @@ def track_face():
                         offset_int = int(offset_str)
                         center_x = float(center_x_str)
                         center_y = float(center_y_str)
+                        
+                        # Check for detection conflicts
+                        tracked_detection_id = check_detection_conflicts(
+                            gallery_id, detection_id, center_x, center_y)
+                        
+                        # Only process if this is the detection ID we want to track
+                        if tracked_detection_id == detection_id:
+                            if offset_int > last_offset:
+                                last_offset = offset_int
+                                x_last = center_x
+                                y_last = center_y
+                                adjust_servo_angles_using_old_logic(x_last, y_last)
                     except:
                         offset_int = -1
                         center_x, center_y = None, None
-                    
-                    # If we have a valid offset AND it's larger than last_offset => new data
-                    if offset_int > last_offset and center_x is not None and center_y is not None:
-                        last_offset = offset_int
-                        x_last = center_x
-                        y_last = center_y
-                        
-                        # Move servos
-                        adjust_servo_angles_using_old_logic(x_last, y_last)
-                    else:
-                        # offset is the same => no new lines
-                        # optionally keep moving servo to x_last,y_last
-                        pass
-                else:
-                    # The largest row doesn't match our filter conditions
-                    pass
-
-            else:
-                # CSV is empty or missing => no data to track
-                pass
             
             time.sleep(0.01)
 
@@ -285,6 +347,16 @@ def main():
     finally:
         print("Cleaning up servo positions...")
         cleanup_servos()
+
+def get_target_face_id():
+    try:
+        with open('tmp/target_face.txt', 'r') as f:
+            return f.read().strip()
+    except:
+        return '1'  # Default face ID
+
+# Update the target face ID
+TARGET_GALLERY_ID = get_target_face_id()
 
 if __name__ == "__main__":
     main()
