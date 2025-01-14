@@ -84,12 +84,7 @@ kit.servo[1].angle = servo1_angle
 set_arm_position(kit, arm_angle)
 
 def adjust_servo_angles_using_old_logic(target_x, target_y):
-    """
-    Original motor control logic:
-      - Move servo1 (horizontal) by K_P*error_x if outside deadzone
-      - Move servo0 (partial vertical) by K_P*error_y if outside deadzone
-      - If servo0 hits top/bottom limit, move the arm angle (servo2 & 3).
-    """
+    
     global servo0_angle, servo1_angle, arm_angle
 
     error_x = CENTRE_X - target_x
@@ -153,7 +148,6 @@ def adjust_servo_angles_using_old_logic(target_x, target_y):
 def start_monitor_detection():
     """
     Launches the face-detection script in the background. 
-    Adjust as needed for your environment.
     """
     subprocess.Popen(['python3', 'monitor_detections.py'])
     print("Started monitor_detection.py")
@@ -253,10 +247,6 @@ def track_face():
             else:
                 # CSV is empty or missing => no data to track
                 pass
-
-            # If desired, you can keep moving the servo to the last known coords:
-            # if x_last is not None and y_last is not None:
-            #     adjust_servo_angles_using_old_logic(x_last, y_last)
             
             time.sleep(0.01)
 
@@ -268,10 +258,6 @@ def track_face():
             time.sleep(0.1)
 
 def cleanup_servos():
-    """
-    Smoothly move the servos back to neutral (90, 90, 90).
-    Increase 'delay' or 'steps' if you want a slower move.
-    """
     global servo0_angle, servo1_angle, arm_angle
     target0, target1, targetA = 90, 90, 90
     steps = 10
