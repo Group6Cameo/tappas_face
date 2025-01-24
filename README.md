@@ -1,4 +1,4 @@
-# tappas_face
+# TAPPAS Face Recognition
 A port of the x86 Hailo 8 face recognition pipeline that works on Raspberry Pi 5 with Hailo 8L.
 
 ## Requirements
